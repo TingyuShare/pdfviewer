@@ -2,86 +2,226 @@
 <html lang="zh-CN">
 <head>
   <meta charset="UTF-8">
-  <title>PDF.js SVG 渲染示例</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>纯静态 PDF SVG 多页阅读器</title>
   <style>
+    * {
+      box-sizing: border-box;
+    }
     body {
-      background-color: #f0f2f5;
+      background-color: #525659;
       margin: 0;
-      padding: 20px;
+      padding: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
       display: flex;
       flex-direction: column;
       align-items: center;
-      font-family: sans-serif;
+      min-height: 100vh;
     }
-    #controls {
-      margin-bottom: 20px;
+
+    /* 顶部固定工具栏 */
+    .toolbar {
+      position: sticky;
+      top: 0;
+      z-index: 100;
+      width: 100%;
+      background: #323639;
+      color: #fff;
+      padding: 12px 24px;
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
     }
-    #pdf-container {
-      background: #ffffff;
-      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+
+    .toolbar-title {
+      font-size: 16px;
+      font-weight: bold;
+    }
+
+    .file-upload-btn {
+      background: #007bff;
+      color: white;
+      padding: 6px 16px;
       border-radius: 4px;
-      overflow: hidden;
+      cursor: pointer;
+      font-size: 14px;
+      transition: background 0.2s;
     }
-    /* 生成的 SVG 继承容器样式 */
-    #pdf-container svg {
+
+    .file-upload-btn:hover {
+      background: #0056b3;
+    }
+
+    #file-input {
+      display: none;
+    }
+
+    /* 阅读器主体页面容器 */
+    #pdf-container {
+      width: 100%;
+      max-width: 960px;
+      padding: 20px 10px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+    }
+
+    /* 单页 PDF 包裹块样式 */
+    .pdf-page-wrapper {
+      background: #ffffff;
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.25);
+      margin-bottom: 24px;
+      border-radius: 2px;
+      position: relative;
+      min-height: 600px; /* 未渲染时的占位高度 */
+      width: 100%;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+    }
+
+    .pdf-page-wrapper svg {
       display: block;
+      width: 100%;
+      height: auto;
+    }
+
+    /* 加载与状态文本 */
+    .page-placeholder {
+      color: #888;
+      font-size: 14px;
+    }
+
+    .status-msg {
+      color: #e0e0e0;
+      font-size: 16px;
+      margin-top: 100px;
+    }
+
+    .error-msg {
+      color: #ff6b6b;
+      font-size: 14px;
+      padding: 20px;
+      text-align: center;
     }
   </style>
 
-  <!-- 引入 PDF.js CDN (使用最新稳定版 3.x/4.x 均可) -->
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+  <!-- 引入 PDF.js 2.16.105 稳定版（SVG 支持最好且无废弃 Warning） -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.min.js"></script>
 </head>
 <body>
 
-  <div id="controls">
-    <input type="file" id="file-input" accept="application/pdf" />
+  <!-- 顶部控制栏 -->
+  <div class="toolbar">
+    <div class="toolbar-title">PDF SVG 在线阅读器</div>
+    <div>
+      <label for="file-input" class="file-upload-btn">打开本地 PDF</label>
+      <input type="file" id="file-input" accept="application/pdf" />
+    </div>
   </div>
 
-  <div id="pdf-container"></div>
+  <!-- 阅读器内容区域 -->
+  <div id="pdf-container">
+    <span class="status-msg">请点击右上角选择并加载 PDF 文件</span>
+  </div>
 
   <script>
-    // 1. 设置 Worker 脚本路径
+    // 1. 设置 Worker 路径（确保版本与 pdf.min.js 精确对应）
     pdfjsLib.GlobalWorkerOptions.workerSrc = 
-      'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+      'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.worker.min.js';
 
     const fileInput = document.getElementById('file-input');
     const container = document.getElementById('pdf-container');
+    
+    let pdfDoc = null;
+    let pageObservers = null;
 
     // 监听本地文件选择
     fileInput.addEventListener('change', async (e) => {
       const file = e.target.files[0];
       if (!file) return;
 
-      const fileArrayBuffer = await file.arrayBuffer();
-      renderPdfSvg(fileArrayBuffer);
+      container.innerHTML = '<span class="status-msg">正在解析文档，请稍候...</span>';
+
+      try {
+        const fileArrayBuffer = await file.arrayBuffer();
+        await loadPdfDocument(fileArrayBuffer);
+      } catch (err) {
+        console.error('文件读取或解析失败:', err);
+        container.innerHTML = `<span class="status-msg error-msg">解析失败：${err.message}</span>`;
+      }
     });
 
-    // 2. SVG 渲染主流程
-    async function renderPdfSvg(data) {
-      container.innerHTML = '正在渲染 SVG...';
+    // 2. 加载 PDF 文档框架并初始化占位 DOM
+    async function loadPdfDocument(data) {
+      // 清理旧的 Observer
+      if (pageObservers) pageObservers.disconnect();
 
-      // 加载文档
-      const pdf = await pdfjsLib.getDocument({ data }).promise;
-      
-      // 以渲染第 1 页为例
-      const page = await pdf.getPage(1);
-      
-      // 设置渲染缩放比例（例如 1.5 倍）
-      const scale = 1.5;
-      const viewport = page.getViewport({ scale });
+      const loadingTask = pdfjsLib.getDocument({
+        data: data,
+        cMapUrl: 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/cmaps/',
+        cMapPacked: true,
+      });
 
-      // 获取页面绘制算子/图像对象
-      const operatorList = await page.getOperatorList();
+      pdfDoc = await loadingTask.promise;
+      container.innerHTML = ''; // 清空容器
 
-      // 创建 SVGGraphics 实例
-      const svgGfx = new pdfjsLib.SVGGraphics(page.commonObjs, page.objs);
+      // 初始化 IntersectionObserver（滚动懒加载）
+      pageObservers = new IntersectionObserver((entries) => {
+        entries.forEach(entry => {
+          if (entry.isIntersecting) {
+            const pageWrapper = entry.target;
+            const pageNum = parseInt(pageWrapper.dataset.pageNum, 10);
+            
+            // 触发渲染并取消对该页面的监听（只渲染一次）
+            if (pageWrapper.dataset.rendered === 'false') {
+              pageWrapper.dataset.rendered = 'true';
+              renderPageSvg(pageNum, pageWrapper);
+            }
+          }
+        });
+      }, {
+        rootMargin: '200px 0px', // 预加载视口上下 200px 范围内的页面
+        threshold: 0.01
+      });
 
-      // 生成 SVG DOM 节点
-      const svg = await svgGfx.getSVG(operatorList, viewport);
+      // 预先创建所有页面的占位 DOM 节点
+      for (let i = 1; i <= pdfDoc.numPages; i++) {
+        const pageWrapper = document.createElement('div');
+        pageWrapper.className = 'pdf-page-wrapper';
+        pageWrapper.dataset.pageNum = i;
+        pageWrapper.dataset.rendered = 'false';
+        pageWrapper.innerHTML = `<span class="page-placeholder">正在加载第 ${i} / ${pdfDoc.numPages} 页...</span>`;
+        
+        container.appendChild(pageWrapper);
+        pageObservers.observe(pageWrapper); // 开始监听滚动进入视口
+      }
+    }
 
-      // 清空容器并插入 SVG 节点
-      container.innerHTML = '';
-      container.appendChild(svg);
+    // 3. 渲染单页 SVG
+    async function renderPageSvg(pageNum, wrapper) {
+      try {
+        const page = await pdfDoc.getPage(pageNum);
+        const scale = 1.5; // 缩放比例
+        const viewport = page.getViewport({ scale });
+
+        // 根据实际 viewport 尺寸更新容器的物理宽高比例，防止出现不必要的拉伸
+        wrapper.style.minHeight = `${viewport.height}px`;
+
+        const operatorList = await page.getOperatorList();
+        const svgGfx = new pdfjsLib.SVGGraphics(page.commonObjs, page.objs);
+
+        // 生成 SVG DOM 节点
+        const svg = await svgGfx.getSVG(operatorList, viewport);
+
+        // 渲染完成，挂载到 DOM 树
+        wrapper.innerHTML = '';
+        wrapper.appendChild(svg);
+      } catch (err) {
+        console.error(`第 ${pageNum} 页 SVG 渲染失败:`, err);
+        wrapper.innerHTML = `<div class="error-msg">第 ${pageNum} 页渲染失败<br><small>${err.message}</small></div>`;
+      }
     }
   </script>
 </body>
