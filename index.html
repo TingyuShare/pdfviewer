@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <title>PDF.js SVG 渲染示例</title>
+  <style>
+    body {
+      background-color: #f0f2f5;
+      margin: 0;
+      padding: 20px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      font-family: sans-serif;
+    }
+    #controls {
+      margin-bottom: 20px;
+    }
+    #pdf-container {
+      background: #ffffff;
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+      border-radius: 4px;
+      overflow: hidden;
+    }
+    /* 生成的 SVG 继承容器样式 */
+    #pdf-container svg {
+      display: block;
+    }
+  </style>
+
+  <!-- 引入 PDF.js CDN (使用最新稳定版 3.x/4.x 均可) -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+</head>
+<body>
+
+  <div id="controls">
+    <input type="file" id="file-input" accept="application/pdf" />
+  </div>
+
+  <div id="pdf-container"></div>
+
+  <script>
+    // 1. 设置 Worker 脚本路径
+    pdfjsLib.GlobalWorkerOptions.workerSrc = 
+      'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+
+    const fileInput = document.getElementById('file-input');
+    const container = document.getElementById('pdf-container');
+
+    // 监听本地文件选择
+    fileInput.addEventListener('change', async (e) => {
+      const file = e.target.files[0];
+      if (!file) return;
+
+      const fileArrayBuffer = await file.arrayBuffer();
+      renderPdfSvg(fileArrayBuffer);
+    });
+
+    // 2. SVG 渲染主流程
+    async function renderPdfSvg(data) {
+      container.innerHTML = '正在渲染 SVG...';
+
+      // 加载文档
+      const pdf = await pdfjsLib.getDocument({ data }).promise;
+      
+      // 以渲染第 1 页为例
+      const page = await pdf.getPage(1);
+      
+      // 设置渲染缩放比例（例如 1.5 倍）
+      const scale = 1.5;
+      const viewport = page.getViewport({ scale });
+
+      // 获取页面绘制算子/图像对象
+      const operatorList = await page.getOperatorList();
+
+      // 创建 SVGGraphics 实例
+      const svgGfx = new pdfjsLib.SVGGraphics(page.commonObjs, page.objs);
+
+      // 生成 SVG DOM 节点
+      const svg = await svgGfx.getSVG(operatorList, viewport);
+
+      // 清空容器并插入 SVG 节点
+      container.innerHTML = '';
+      container.appendChild(svg);
+    }
+  </script>
+</body>
+</html>
