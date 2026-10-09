@@ -1,2 +1,0 @@
-# pdfviewer
-simple viewer
