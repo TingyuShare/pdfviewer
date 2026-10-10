@@ -72,6 +72,28 @@
             opacity: 0;
             cursor: pointer;
         }
+        .toolbar-actions {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            flex: 0 0 auto;
+        }
+        .toolbar-actions[hidden] {
+            display: none;
+        }
+        .translation-nav {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .translation-nav[hidden] {
+            display: none;
+        }
+        .translation-nav span {
+            min-width: 64px;
+            text-align: center;
+            font-size: 13px;
+        }
         .status {
             color: #d5d8da;
             font-size: 13px;
@@ -120,6 +142,31 @@
         .text-layer ::selection {
             background: rgba(0, 100, 255, .28);
         }
+        .translation-page {
+            margin: 0 0 20px;
+            padding: 32px 40px;
+            background: #fff;
+            box-shadow: 0 2px 10px rgba(0,0,0,.12);
+            overflow-wrap: anywhere;
+        }
+        .translation-page h2 {
+            margin-bottom: 18px;
+            padding-bottom: 10px;
+            border-bottom: 1px solid #e5e7e9;
+            color: #6b7074;
+            font-size: 14px;
+            font-weight: 500;
+        }
+        .translation-page p {
+            min-height: 1em;
+            margin: 0 0 8px;
+            font-size: 16px;
+            line-height: 1.8;
+            white-space: pre-wrap;
+        }
+        .reader[data-mode="translation"] .pdf-pages {
+            display: none;
+        }
         .placeholder {
             min-height: 60vh;
             display: flex;
@@ -149,9 +196,15 @@
                 width: 100%;
                 text-align: left;
             }
+            .toolbar-actions {
+                flex-wrap: wrap;
+            }
             .reader {
                 margin: 12px auto;
                 padding: 0 10px;
+            }
+            .translation-page {
+                padding: 22px 18px;
             }
         }
     </style>
@@ -161,14 +214,22 @@
 <div class="container">
     <div class="toolbar">
         <h1>PDF 文本阅读器</h1>
-        <div class="file-input-wrapper">
-            <button class="btn" type="button">选择 PDF 文件</button>
-            <input type="file" id="file-selector" accept="application/pdf,.pdf" aria-label="选择 PDF 文件">
+        <div class="toolbar-actions">
+            <div class="file-input-wrapper">
+                <button class="btn" type="button">选择 PDF 文件</button>
+                <input type="file" id="file-selector" accept="application/pdf,.pdf" aria-label="选择 PDF 文件">
+            </div>
+            <button class="btn" id="translation-toggle" type="button" aria-pressed="false" hidden>文本视图</button>
+            <div class="translation-nav" id="translation-nav" hidden>
+                <button class="btn" id="previous-page" type="button">上一页</button>
+                <span id="page-counter" aria-live="polite"></span>
+                <button class="btn" id="next-page" type="button">下一页</button>
+            </div>
         </div>
-        <div class="status" id="status" role="status" aria-live="polite">选择 PDF 后将提取为可选择、可翻译的网页文本。</div>
+        <div class="status" id="status" role="status" aria-live="polite">选择 PDF 后将提取文本。</div>
     </div>
     
-    <main class="reader">
+    <main class="reader" id="reader" data-mode="pdf">
         <div class="placeholder" id="placeholder-text">
             <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
                 <path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z"></path>
@@ -176,7 +237,8 @@
             </svg>
             <p>请从本地选择 PDF。</p>
         </div>
-        <div id="pages"></div>
+        <div class="pdf-pages" id="pages"></div>
+        <div id="translation-pages" hidden></div>
     </main>
 </div>
 
@@ -184,16 +246,112 @@
 <script>
     const fileSelector = document.getElementById('file-selector');
     const pagesContainer = document.getElementById('pages');
+    const translationPagesContainer = document.getElementById('translation-pages');
+    const translationToggle = document.getElementById('translation-toggle');
+    const translationNav = document.getElementById('translation-nav');
+    const previousPageButton = document.getElementById('previous-page');
+    const nextPageButton = document.getElementById('next-page');
+    const pageCounter = document.getElementById('page-counter');
+    const reader = document.getElementById('reader');
     const placeholderText = document.getElementById('placeholder-text');
     const status = document.getElementById('status');
     let loadId = 0;
     let pageObserver = null;
+    let currentTranslationPage = 0;
+    const translationPages = [];
     const renderTasks = new Set();
     const resizeObservers = new Set();
 
     function setStatus(message, isError) {
         status.textContent = message;
         status.dataset.error = isError ? 'true' : 'false';
+    }
+
+    function isCjk(text) {
+        return /[\u2e80-\u9fff]/.test(text);
+    }
+
+    function getPageLines(items) {
+        const lines = [];
+        let line = [];
+        let baseline = null;
+
+        for (const item of items) {
+            if (!('str' in item)) continue;
+            const y = item.transform[5];
+            const fontSize = Math.abs(item.transform[3]) || 10;
+
+            if (line.length && (Math.abs(y - baseline) > Math.max(fontSize * 0.35, 2) || line[line.length - 1].hasEOL)) {
+                lines.push(line);
+                line = [];
+            }
+            if (!line.length) baseline = y;
+            line.push(item);
+
+            if (item.hasEOL) {
+                lines.push(line);
+                line = [];
+                baseline = null;
+            }
+        }
+        if (line.length) lines.push(line);
+        return lines;
+    }
+
+    function lineToText(line) {
+        return line.reduce((text, item, index) => {
+            if (index === 0) return item.str;
+            const previous = line[index - 1];
+            const gap = item.transform[4] - (previous.transform[4] + previous.width);
+            const needsSpace = gap > Math.max(Math.abs(item.transform[3]) * 0.2, 1)
+                && !/\s$/.test(text)
+                && !/^\s/.test(item.str)
+                && !isCjk(text.slice(-1) + item.str.slice(0, 1));
+            return text + (needsSpace ? ' ' : '') + item.str;
+        }, '');
+    }
+
+    function appendTranslationPage(pageNumber, textContent) {
+        const lines = getPageLines(textContent.items)
+            .map(lineToText)
+            .filter(line => line.trim());
+        translationPages[pageNumber - 1] = { pageNumber, lines };
+    }
+
+    function findTextPage(startIndex, direction) {
+        for (let index = startIndex; index >= 0 && index < translationPages.length; index += direction) {
+            if (translationPages[index]?.lines.length) return index;
+        }
+        return -1;
+    }
+
+    function renderTranslationPage(pageIndex) {
+        const page = translationPages[pageIndex];
+        if (!page) return;
+        currentTranslationPage = pageIndex;
+
+        const section = document.createElement('section');
+        section.className = 'translation-page';
+        const heading = document.createElement('h2');
+        heading.textContent = `第 ${page.pageNumber} 页`;
+        section.appendChild(heading);
+
+        if (!page.lines.length) {
+            const message = document.createElement('p');
+            message.textContent = '此页没有可提取的文字，可能是空白页或扫描图片。';
+            section.appendChild(message);
+        }
+        for (const line of page.lines) {
+            const paragraph = document.createElement('p');
+            paragraph.textContent = line;
+            section.appendChild(paragraph);
+        }
+
+        translationPagesContainer.replaceChildren(section);
+        pageCounter.textContent = `${page.pageNumber} / ${translationPages.length}`;
+        previousPageButton.disabled = findTextPage(pageIndex - 1, -1) === -1;
+        nextPageButton.disabled = findTextPage(pageIndex + 1, 1) === -1;
+        window.scrollTo(0, 0);
     }
 
     function appendPage(pageNumber, page, textContent, currentLoadId) {
@@ -265,6 +423,7 @@
         }
 
         pagesContainer.appendChild(section);
+        appendTranslationPage(pageNumber, textContent);
         pdfjsLib.renderTextLayer({
             textContent,
             container: textLayer,
@@ -281,6 +440,13 @@
         const file = event.target.files[0];
         if (!file) return;
         const currentLoadId = ++loadId;
+        currentTranslationPage = 0;
+        reader.dataset.mode = 'pdf';
+        translationPagesContainer.hidden = true;
+        translationNav.hidden = true;
+        translationToggle.hidden = true;
+        translationToggle.setAttribute('aria-pressed', 'false');
+        translationToggle.textContent = '文本视图';
         if (pageObserver) pageObserver.disconnect();
         pageObserver = null;
         for (const observer of resizeObservers) observer.disconnect();
@@ -288,6 +454,8 @@
         for (const task of renderTasks) task.cancel();
         renderTasks.clear();
         pagesContainer.replaceChildren();
+        translationPagesContainer.replaceChildren();
+        translationPages.length = 0;
         setStatus('正在读取 PDF…', false);
 
         if (file.type !== 'application/pdf' && !file.name.toLowerCase().endsWith('.pdf')) {
@@ -339,20 +507,51 @@
             }
 
             placeholderText.hidden = true;
+            translationToggle.hidden = !textItems;
             setStatus(
                 textItems
-                    ? `已载入 ${pdf.numPages} 页。页面保持 PDF 原始排版。`
+                    ? `已载入 ${pdf.numPages} 页。PDF 视图保留原排版；如需文本，请切换到“文本视图”。`
                     : `已载入 ${pdf.numPages} 页，但未提取到文字；该 PDF 可能是扫描图片，需先进行 OCR。`,
                 !textItems
             );
         } catch (error) {
             if (currentLoadId !== loadId) return;
             pagesContainer.replaceChildren();
+            translationPagesContainer.replaceChildren();
+            translationPages.length = 0;
             placeholderText.hidden = false;
+            translationNav.hidden = true;
+            translationToggle.hidden = true;
             setStatus(`无法读取该 PDF：${error.message || '文件可能已损坏或受密码保护。'}`, true);
         } finally {
             if (currentLoadId === loadId) fileSelector.value = '';
         }
+    });
+
+    translationToggle.addEventListener('click', () => {
+        const showTranslation = reader.dataset.mode !== 'translation';
+        reader.dataset.mode = showTranslation ? 'translation' : 'pdf';
+        translationPagesContainer.hidden = !showTranslation;
+        translationNav.hidden = !showTranslation;
+        translationToggle.setAttribute('aria-pressed', String(showTranslation));
+        translationToggle.textContent = showTranslation ? '返回 PDF 原版布局' : '文本视图';
+        if (showTranslation) renderTranslationPage(findTextPage(0, 1));
+        setStatus(
+            showTranslation
+                ? '当前仅显示一页普通网页文字；若插件无反应，请允许它访问 file:// 页面。'
+                : '已返回 PDF 原版布局。可切换到文本视图。',
+            false
+        );
+    });
+
+    previousPageButton.addEventListener('click', () => {
+        const previousPage = findTextPage(currentTranslationPage - 1, -1);
+        if (previousPage !== -1) renderTranslationPage(previousPage);
+    });
+
+    nextPageButton.addEventListener('click', () => {
+        const nextPage = findTextPage(currentTranslationPage + 1, 1);
+        if (nextPage !== -1) renderTranslationPage(nextPage);
     });
 </script>
 
