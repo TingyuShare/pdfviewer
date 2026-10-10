@@ -1,228 +1,360 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>纯静态 PDF SVG 多页阅读器</title>
-  <style>
-    * {
-      box-sizing: border-box;
-    }
-    body {
-      background-color: #525659;
-      margin: 0;
-      padding: 0;
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      min-height: 100vh;
-    }
-
-    /* 顶部固定工具栏 */
-    .toolbar {
-      position: sticky;
-      top: 0;
-      z-index: 100;
-      width: 100%;
-      background: #323639;
-      color: #fff;
-      padding: 12px 24px;
-      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-    }
-
-    .toolbar-title {
-      font-size: 16px;
-      font-weight: bold;
-    }
-
-    .file-upload-btn {
-      background: #007bff;
-      color: white;
-      padding: 6px 16px;
-      border-radius: 4px;
-      cursor: pointer;
-      font-size: 14px;
-      transition: background 0.2s;
-    }
-
-    .file-upload-btn:hover {
-      background: #0056b3;
-    }
-
-    #file-input {
-      display: none;
-    }
-
-    /* 阅读器主体页面容器 */
-    #pdf-container {
-      width: 100%;
-      max-width: 960px;
-      padding: 20px 10px;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-    }
-
-    /* 单页 PDF 包裹块样式 */
-    .pdf-page-wrapper {
-      background: #ffffff;
-      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.25);
-      margin-bottom: 24px;
-      border-radius: 2px;
-      position: relative;
-      min-height: 600px; /* 未渲染时的占位高度 */
-      width: 100%;
-      display: flex;
-      justify-content: center;
-      align-items: center;
-    }
-
-    .pdf-page-wrapper svg {
-      display: block;
-      width: 100%;
-      height: auto;
-    }
-
-    /* 加载与状态文本 */
-    .page-placeholder {
-      color: #888;
-      font-size: 14px;
-    }
-
-    .status-msg {
-      color: #e0e0e0;
-      font-size: 16px;
-      margin-top: 100px;
-    }
-
-    .error-msg {
-      color: #ff6b6b;
-      font-size: 14px;
-      padding: 20px;
-      text-align: center;
-    }
-  </style>
-
-  <!-- 引入 PDF.js 2.16.105 稳定版（SVG 支持最好且无废弃 Warning） -->
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.min.js"></script>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PDF 文本阅读器</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        body, html {
+            width: 100%;
+            height: 100%;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            background-color: #f1f3f5;
+            color: #25282a;
+        }
+        .container {
+            display: flex;
+            flex-direction: column;
+            width: 100%;
+            min-height: 100%;
+        }
+        .toolbar {
+            position: sticky;
+            top: 0;
+            background-color: #323639;
+            color: white;
+            padding: 10px 20px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.3);
+            z-index: 10;
+            gap: 16px;
+        }
+        .toolbar h1 {
+            font-size: 16px;
+            font-weight: 500;
+            white-space: nowrap;
+        }
+        .file-input-wrapper {
+            position: relative;
+            display: inline-block;
+            overflow: hidden;
+            flex: 0 0 auto;
+        }
+        .btn {
+            border: 1px solid #4d5154;
+            color: #fff;
+            background-color: #282c2f;
+            padding: 6px 12px;
+            border-radius: 4px;
+            font-size: 14px;
+            cursor: pointer;
+            transition: background-color 0.2s;
+        }
+        .btn:hover {
+            background-color: #42474a;
+        }
+        .btn:focus-within, .btn:focus-visible {
+            outline: 2px solid #8ec5ff;
+            outline-offset: 2px;
+        }
+        .file-input-wrapper input[type=file] {
+            position: absolute;
+            inset: 0;
+            width: 100%;
+            height: 100%;
+            opacity: 0;
+            cursor: pointer;
+        }
+        .status {
+            color: #d5d8da;
+            font-size: 13px;
+            text-align: right;
+        }
+        .status[data-error="true"] {
+            color: #ffb4ab;
+        }
+        .reader {
+            width: min(900px, 100%);
+            margin: 24px auto;
+            padding: 0 20px;
+        }
+        .pdf-page {
+            position: relative;
+            width: 100%;
+            max-width: 850px;
+            margin: 0 0 20px;
+            background: #fff;
+            box-shadow: 0 2px 10px rgba(0,0,0,.12);
+        }
+        .pdf-page canvas {
+            display: block;
+            width: 100%;
+            height: 100%;
+        }
+        .text-layer {
+            position: absolute;
+            inset: 0 auto auto 0;
+            overflow: hidden;
+            line-height: 1;
+            text-align: initial;
+            text-size-adjust: none;
+            transform: scale(var(--display-scale, 1));
+            transform-origin: 0 0;
+            color: transparent;
+            forced-color-adjust: none;
+        }
+        .text-layer span {
+            position: absolute;
+            white-space: pre;
+            color: transparent;
+            cursor: text;
+            transform-origin: 0 0;
+        }
+        .text-layer ::selection {
+            background: rgba(0, 100, 255, .28);
+        }
+        .placeholder {
+            min-height: 60vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            color: #70767a;
+            text-align: center;
+            padding: 20px;
+        }
+        .placeholder p {
+            margin-top: 10px;
+            font-size: 14px;
+        }
+        [hidden] {
+            display: none !important;
+        }
+        @media (max-width: 600px) {
+            .toolbar {
+                padding: 10px 12px;
+                flex-wrap: wrap;
+            }
+            .toolbar h1 {
+                font-size: 14px;
+            }
+            .status {
+                width: 100%;
+                text-align: left;
+            }
+            .reader {
+                margin: 12px auto;
+                padding: 0 10px;
+            }
+        }
+    </style>
 </head>
 <body>
 
-  <!-- 顶部控制栏 -->
-  <div class="toolbar">
-    <div class="toolbar-title">PDF SVG 在线阅读器</div>
-    <div>
-      <label for="file-input" class="file-upload-btn">打开本地 PDF</label>
-      <input type="file" id="file-input" accept="application/pdf" />
+<div class="container">
+    <div class="toolbar">
+        <h1>PDF 文本阅读器</h1>
+        <div class="file-input-wrapper">
+            <button class="btn" type="button">选择 PDF 文件</button>
+            <input type="file" id="file-selector" accept="application/pdf,.pdf" aria-label="选择 PDF 文件">
+        </div>
+        <div class="status" id="status" role="status" aria-live="polite">选择 PDF 后将提取为可选择、可翻译的网页文本。</div>
     </div>
-  </div>
-
-  <!-- 阅读器内容区域 -->
-  <div id="pdf-container">
-    <span class="status-msg">请点击右上角选择并加载 PDF 文件</span>
-  </div>
-
-  <script>
-    // 1. 设置 Worker 路径（确保版本与 pdf.min.js 精确对应）
-    pdfjsLib.GlobalWorkerOptions.workerSrc = 
-      'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.worker.min.js';
-
-    const fileInput = document.getElementById('file-input');
-    const container = document.getElementById('pdf-container');
     
-    let pdfDoc = null;
-    let pageObservers = null;
+    <main class="reader">
+        <div class="placeholder" id="placeholder-text">
+            <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z"></path>
+                <polyline points="14 2 14 8 20 8"></polyline>
+            </svg>
+            <p>请从本地选择 PDF。</p>
+        </div>
+        <div id="pages"></div>
+    </main>
+</div>
 
-    // 监听本地文件选择
-    fileInput.addEventListener('change', async (e) => {
-      const file = e.target.files[0];
-      if (!file) return;
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<script>
+    const fileSelector = document.getElementById('file-selector');
+    const pagesContainer = document.getElementById('pages');
+    const placeholderText = document.getElementById('placeholder-text');
+    const status = document.getElementById('status');
+    let loadId = 0;
+    let pageObserver = null;
+    const renderTasks = new Set();
+    const resizeObservers = new Set();
 
-      container.innerHTML = '<span class="status-msg">正在解析文档，请稍候...</span>';
-
-      try {
-        const fileArrayBuffer = await file.arrayBuffer();
-        await loadPdfDocument(fileArrayBuffer);
-      } catch (err) {
-        console.error('文件读取或解析失败:', err);
-        container.innerHTML = `<span class="status-msg error-msg">解析失败：${err.message}</span>`;
-      }
-    });
-
-    // 2. 加载 PDF 文档框架并初始化占位 DOM
-    async function loadPdfDocument(data) {
-      // 清理旧的 Observer
-      if (pageObservers) pageObservers.disconnect();
-
-      const loadingTask = pdfjsLib.getDocument({
-        data: data,
-        cMapUrl: 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/cmaps/',
-        cMapPacked: true,
-      });
-
-      pdfDoc = await loadingTask.promise;
-      container.innerHTML = ''; // 清空容器
-
-      // 初始化 IntersectionObserver（滚动懒加载）
-      pageObservers = new IntersectionObserver((entries) => {
-        entries.forEach(entry => {
-          if (entry.isIntersecting) {
-            const pageWrapper = entry.target;
-            const pageNum = parseInt(pageWrapper.dataset.pageNum, 10);
-            
-            // 触发渲染并取消对该页面的监听（只渲染一次）
-            if (pageWrapper.dataset.rendered === 'false') {
-              pageWrapper.dataset.rendered = 'true';
-              renderPageSvg(pageNum, pageWrapper);
-            }
-          }
-        });
-      }, {
-        rootMargin: '200px 0px', // 预加载视口上下 200px 范围内的页面
-        threshold: 0.01
-      });
-
-      // 预先创建所有页面的占位 DOM 节点
-      for (let i = 1; i <= pdfDoc.numPages; i++) {
-        const pageWrapper = document.createElement('div');
-        pageWrapper.className = 'pdf-page-wrapper';
-        pageWrapper.dataset.pageNum = i;
-        pageWrapper.dataset.rendered = 'false';
-        pageWrapper.innerHTML = `<span class="page-placeholder">正在加载第 ${i} / ${pdfDoc.numPages} 页...</span>`;
-        
-        container.appendChild(pageWrapper);
-        pageObservers.observe(pageWrapper); // 开始监听滚动进入视口
-      }
+    function setStatus(message, isError) {
+        status.textContent = message;
+        status.dataset.error = isError ? 'true' : 'false';
     }
 
-    // 3. 渲染单页 SVG
-    async function renderPageSvg(pageNum, wrapper) {
-      try {
-        const page = await pdfDoc.getPage(pageNum);
-        const scale = 1.5; // 缩放比例
+    function appendPage(pageNumber, page, textContent, currentLoadId) {
+        const baseViewport = page.getViewport({ scale: 1 });
+        const scale = Math.min(1.25, 850 / baseViewport.width);
         const viewport = page.getViewport({ scale });
+        const section = document.createElement('section');
+        section.className = 'pdf-page';
+        section.setAttribute('aria-label', `PDF 第 ${pageNumber} 页`);
+        section.style.aspectRatio = `${viewport.width} / ${viewport.height}`;
 
-        // 根据实际 viewport 尺寸更新容器的物理宽高比例，防止出现不必要的拉伸
-        wrapper.style.minHeight = `${viewport.height}px`;
+        const canvas = document.createElement('canvas');
+        canvas.setAttribute('aria-hidden', 'true');
+        section.appendChild(canvas);
 
-        const operatorList = await page.getOperatorList();
-        const svgGfx = new pdfjsLib.SVGGraphics(page.commonObjs, page.objs);
+        const textLayer = document.createElement('div');
+        textLayer.className = 'text-layer';
+        textLayer.setAttribute('role', 'document');
+        textLayer.style.width = `${viewport.width}px`;
+        textLayer.style.height = `${viewport.height}px`;
+        textLayer.style.setProperty('--scale-factor', String(scale));
+        section.appendChild(textLayer);
 
-        // 生成 SVG DOM 节点
-        const svg = await svgGfx.getSVG(operatorList, viewport);
+        const updateTextScale = () => {
+            textLayer.style.setProperty('--display-scale', String(section.clientWidth / viewport.width));
+        };
+        const resizeObserver = new ResizeObserver(updateTextScale);
+        resizeObserver.observe(section);
+        resizeObservers.add(resizeObserver);
+        updateTextScale();
 
-        // 渲染完成，挂载到 DOM 树
-        wrapper.innerHTML = '';
-        wrapper.appendChild(svg);
-      } catch (err) {
-        console.error(`第 ${pageNum} 页 SVG 渲染失败:`, err);
-        wrapper.innerHTML = `<div class="error-msg">第 ${pageNum} 页渲染失败<br><small>${err.message}</small></div>`;
-      }
+        const state = { rendered: false, renderTask: null, isVisible: false };
+        const render = async () => {
+            if (state.rendered || state.renderTask || currentLoadId !== loadId) return;
+            const outputScale = Math.min(window.devicePixelRatio || 1, 2);
+            canvas.width = Math.floor(viewport.width * outputScale);
+            canvas.height = Math.floor(viewport.height * outputScale);
+            const context = canvas.getContext('2d');
+            const task = page.render({
+                canvasContext: context,
+                viewport,
+                transform: outputScale === 1 ? null : [outputScale, 0, 0, outputScale, 0, 0]
+            });
+            state.renderTask = task;
+            renderTasks.add(task);
+            try {
+                await task.promise;
+                if (currentLoadId === loadId && state.isVisible) {
+                    state.rendered = true;
+                } else {
+                    canvas.width = 0;
+                    canvas.height = 0;
+                }
+            } catch (error) {
+                if (error.name !== 'RenderingCancelledException' && currentLoadId === loadId) {
+                    setStatus(`第 ${pageNumber} 页渲染失败：${error.message}`, true);
+                }
+            } finally {
+                renderTasks.delete(task);
+                if (state.renderTask === task) state.renderTask = null;
+            }
+        };
+
+        if (pageObserver) {
+            pageObserver.observe(section);
+        } else {
+            state.isVisible = true;
+            render();
+        }
+
+        pagesContainer.appendChild(section);
+        pdfjsLib.renderTextLayer({
+            textContent,
+            container: textLayer,
+            viewport
+        }).promise.catch(error => {
+            if (currentLoadId === loadId) {
+                setStatus(`第 ${pageNumber} 页文字层创建失败：${error.message}`, true);
+            }
+        });
+        return { render, state, canvas, resizeObserver };
     }
-  </script>
+
+    fileSelector.addEventListener('change', async (event) => {
+        const file = event.target.files[0];
+        if (!file) return;
+        const currentLoadId = ++loadId;
+        if (pageObserver) pageObserver.disconnect();
+        pageObserver = null;
+        for (const observer of resizeObservers) observer.disconnect();
+        resizeObservers.clear();
+        for (const task of renderTasks) task.cancel();
+        renderTasks.clear();
+        pagesContainer.replaceChildren();
+        setStatus('正在读取 PDF…', false);
+
+        if (file.type !== 'application/pdf' && !file.name.toLowerCase().endsWith('.pdf')) {
+            placeholderText.hidden = false;
+            setStatus('所选文件不是 PDF，请重新选择。', true);
+            fileSelector.value = '';
+            return;
+        }
+
+        if (!window.pdfjsLib) {
+            placeholderText.hidden = false;
+            setStatus('PDF 解析组件加载失败，请检查网络连接后刷新页面。', true);
+            return;
+        }
+
+        try {
+            pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+            const pdf = await pdfjsLib.getDocument({ data: await file.arrayBuffer() }).promise;
+            if (currentLoadId !== loadId) return;
+
+            let textItems = 0;
+            if ('IntersectionObserver' in window) {
+                pageObserver = new IntersectionObserver(entries => {
+                    for (const entry of entries) {
+                        const state = entry.target.pageState;
+                        if (entry.isIntersecting) {
+                            state.state.isVisible = true;
+                            state.render();
+                        } else {
+                            state.state.isVisible = false;
+                            if (state.state.rendered) {
+                                state.canvas.width = 0;
+                                state.canvas.height = 0;
+                                state.state.rendered = false;
+                            }
+                        }
+                    }
+                }, { rootMargin: '1000px 0px' });
+            }
+
+            for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber++) {
+                const page = await pdf.getPage(pageNumber);
+                const textContent = await page.getTextContent();
+                textItems += textContent.items.filter(item => item.str.trim()).length;
+                const pageView = appendPage(pageNumber, page, textContent, currentLoadId);
+                Object.assign(pagesContainer.lastElementChild, { pageState: pageView });
+                if (currentLoadId !== loadId) return;
+                setStatus(`正在准备页面… ${pageNumber}/${pdf.numPages} 页`, false);
+            }
+
+            placeholderText.hidden = true;
+            setStatus(
+                textItems
+                    ? `已载入 ${pdf.numPages} 页。页面保持 PDF 原始排版。`
+                    : `已载入 ${pdf.numPages} 页，但未提取到文字；该 PDF 可能是扫描图片，需先进行 OCR。`,
+                !textItems
+            );
+        } catch (error) {
+            if (currentLoadId !== loadId) return;
+            pagesContainer.replaceChildren();
+            placeholderText.hidden = false;
+            setStatus(`无法读取该 PDF：${error.message || '文件可能已损坏或受密码保护。'}`, true);
+        } finally {
+            if (currentLoadId === loadId) fileSelector.value = '';
+        }
+    });
+</script>
+
 </body>
 </html>
