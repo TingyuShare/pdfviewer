@@ -29,14 +29,20 @@
             background-color: #323639;
             color: white;
             padding: 10px 20px;
-            display: flex;
+            display: grid;
+            grid-template-columns: auto minmax(0, 1fr);
+            grid-template-areas:
+                "title actions"
+                "navigation navigation"
+                "status status";
             align-items: center;
-            justify-content: space-between;
             box-shadow: 0 2px 5px rgba(0,0,0,0.3);
             z-index: 10;
-            gap: 16px;
+            column-gap: 16px;
+            row-gap: 8px;
         }
         .toolbar h1 {
+            grid-area: title;
             font-size: 16px;
             font-weight: 500;
             white-space: nowrap;
@@ -57,6 +63,10 @@
             cursor: pointer;
             transition: background-color 0.2s;
         }
+        #translation-toggle {
+            min-width: 132px;
+            white-space: nowrap;
+        }
         .btn:hover {
             background-color: #42474a;
         }
@@ -73,31 +83,56 @@
             cursor: pointer;
         }
         .toolbar-actions {
+            grid-area: actions;
             display: flex;
             align-items: center;
+            justify-content: flex-end;
             gap: 8px;
-            flex: 0 0 auto;
-        }
-        .toolbar-actions[hidden] {
-            display: none;
+            min-width: 0;
         }
         .translation-nav {
+            grid-area: navigation;
             display: flex;
             align-items: center;
             gap: 8px;
+            flex-wrap: wrap;
+            min-height: 40px;
         }
-        .translation-nav[hidden] {
-            display: none;
+        .translation-nav[data-disabled="true"] {
+            visibility: hidden;
+            pointer-events: none;
         }
         .translation-nav span {
-            min-width: 64px;
+            min-width: 70px;
             text-align: center;
             font-size: 13px;
         }
+        .translation-nav select,
+        .translation-nav input {
+            min-height: 32px;
+            padding: 4px 8px;
+            border: 1px solid #4d5154;
+            border-radius: 4px;
+            color: #fff;
+            background: #282c2f;
+            font: inherit;
+        }
+        .translation-nav select {
+            width: 220px;
+        }
+        .translation-nav input {
+            width: 76px;
+        }
         .status {
+            grid-area: status;
+            min-height: 2.6em;
+            line-height: 1.3;
             color: #d5d8da;
             font-size: 13px;
-            text-align: right;
+            overflow: hidden;
+            display: -webkit-box;
+            -webkit-box-orient: vertical;
+            -webkit-line-clamp: 2;
         }
         .status[data-error="true"] {
             color: #ffb4ab;
@@ -148,6 +183,7 @@
             background: #fff;
             box-shadow: 0 2px 10px rgba(0,0,0,.12);
             overflow-wrap: anywhere;
+            scroll-margin-top: 90px;
         }
         .translation-page h2 {
             margin-bottom: 18px;
@@ -164,7 +200,7 @@
             line-height: 1.8;
             white-space: pre-wrap;
         }
-        .reader[data-mode="translation"] .pdf-pages {
+        .reader[data-mode="text"] .pdf-pages {
             display: none;
         }
         .placeholder {
@@ -187,7 +223,12 @@
         @media (max-width: 600px) {
             .toolbar {
                 padding: 10px 12px;
-                flex-wrap: wrap;
+                grid-template-columns: minmax(0, 1fr);
+                grid-template-areas:
+                    "title"
+                    "actions"
+                    "navigation"
+                    "status";
             }
             .toolbar h1 {
                 font-size: 14px;
@@ -197,6 +238,10 @@
                 text-align: left;
             }
             .toolbar-actions {
+                flex-wrap: wrap;
+                justify-content: flex-start;
+            }
+            .translation-nav {
                 flex-wrap: wrap;
             }
             .reader {
@@ -219,12 +264,15 @@
                 <button class="btn" type="button">选择 PDF 文件</button>
                 <input type="file" id="file-selector" accept="application/pdf,.pdf" aria-label="选择 PDF 文件">
             </div>
-            <button class="btn" id="translation-toggle" type="button" aria-pressed="false" hidden>文本视图</button>
-            <div class="translation-nav" id="translation-nav" hidden>
-                <button class="btn" id="previous-page" type="button">上一页</button>
+            <button class="btn" id="translation-toggle" type="button" aria-pressed="false" disabled>文本视图</button>
+        </div>
+        <div class="translation-nav" id="translation-nav" data-disabled="true">
+                <select id="outline-select" aria-label="文档目录" disabled>
+                    <option value="">目录 / 书签</option>
+                </select>
+                <input id="page-jump-input" type="number" min="1" value="1" aria-label="跳转到 PDF 页码" disabled>
+                <button class="btn" id="page-jump-button" type="button" disabled>跳转</button>
                 <span id="page-counter" aria-live="polite"></span>
-                <button class="btn" id="next-page" type="button">下一页</button>
-            </div>
         </div>
         <div class="status" id="status" role="status" aria-live="polite">选择 PDF 后将提取文本。</div>
     </div>
@@ -249,8 +297,9 @@
     const translationPagesContainer = document.getElementById('translation-pages');
     const translationToggle = document.getElementById('translation-toggle');
     const translationNav = document.getElementById('translation-nav');
-    const previousPageButton = document.getElementById('previous-page');
-    const nextPageButton = document.getElementById('next-page');
+    const outlineSelect = document.getElementById('outline-select');
+    const pageJumpInput = document.getElementById('page-jump-input');
+    const pageJumpButton = document.getElementById('page-jump-button');
     const pageCounter = document.getElementById('page-counter');
     const reader = document.getElementById('reader');
     const placeholderText = document.getElementById('placeholder-text');
@@ -258,7 +307,10 @@
     let loadId = 0;
     let pageObserver = null;
     let currentTranslationPage = 0;
+    let totalPdfPages = 0;
+    let textPageObserver = null;
     const translationPages = [];
+    const outlineEntries = [];
     const renderTasks = new Set();
     const resizeObservers = new Set();
 
@@ -318,40 +370,169 @@
         translationPages[pageNumber - 1] = { pageNumber, lines };
     }
 
-    function findTextPage(startIndex, direction) {
-        for (let index = startIndex; index >= 0 && index < translationPages.length; index += direction) {
-            if (translationPages[index]?.lines.length) return index;
-        }
-        return -1;
+    function normalizeHeading(text) {
+        return text.toLocaleLowerCase().replace(/[^\p{L}\p{N}]+/gu, '');
     }
 
-    function renderTranslationPage(pageIndex) {
-        const page = translationPages[pageIndex];
-        if (!page) return;
-        currentTranslationPage = pageIndex;
+    async function getOutlineEntries(pdf) {
+        const outline = await pdf.getOutline();
+        const entries = [];
 
-        const section = document.createElement('section');
-        section.className = 'translation-page';
-        const heading = document.createElement('h2');
-        heading.textContent = `第 ${page.pageNumber} 页`;
-        section.appendChild(heading);
-
-        if (!page.lines.length) {
-            const message = document.createElement('p');
-            message.textContent = '此页没有可提取的文字，可能是空白页或扫描图片。';
-            section.appendChild(message);
-        }
-        for (const line of page.lines) {
-            const paragraph = document.createElement('p');
-            paragraph.textContent = line;
-            section.appendChild(paragraph);
+        async function visit(items, depth) {
+            for (const item of items || []) {
+                if (item.title && item.dest) {
+                    const destination = typeof item.dest === 'string'
+                        ? await pdf.getDestination(item.dest)
+                        : item.dest;
+                    if (Array.isArray(destination) && destination[0]) {
+                        const pageNumber = await pdf.getPageIndex(destination[0]) + 1;
+                        entries.push({ title: item.title, pageNumber, depth });
+                    }
+                }
+                if (item.items?.length) await visit(item.items, depth + 1);
+            }
         }
 
-        translationPagesContainer.replaceChildren(section);
-        pageCounter.textContent = `${page.pageNumber} / ${translationPages.length}`;
-        previousPageButton.disabled = findTextPage(pageIndex - 1, -1) === -1;
-        nextPageButton.disabled = findTextPage(pageIndex + 1, 1) === -1;
-        window.scrollTo(0, 0);
+        await visit(outline, 0);
+        return entries;
+    }
+
+    function findPrintedContentsInfo() {
+        const contentsHeadings = new Set([
+            'contents', 'tableofcontents', '目录', '目錄', '主题摘要', '主題摘要'
+        ]);
+        let contentsPageIndex = -1;
+        let contentsLineIndex = -1;
+
+        for (let pageIndex = 0; pageIndex < Math.min(translationPages.length, 30); pageIndex++) {
+            const lineIndex = translationPages[pageIndex].lines.findIndex(line =>
+                contentsHeadings.has(normalizeHeading(line))
+            );
+            if (lineIndex !== -1) {
+                contentsPageIndex = pageIndex;
+                contentsLineIndex = lineIndex;
+                break;
+            }
+        }
+        if (contentsPageIndex === -1) return { entries: [], pageIndices: new Set() };
+
+        const candidates = [];
+        const pageIndices = new Set([contentsPageIndex]);
+        let lastContentsPage = contentsPageIndex;
+        for (let pageIndex = contentsPageIndex; pageIndex < Math.min(translationPages.length, contentsPageIndex + 16); pageIndex++) {
+            const firstLine = pageIndex === contentsPageIndex ? contentsLineIndex + 1 : 0;
+            const lines = translationPages[pageIndex].lines.slice(firstLine);
+            const pageCandidates = [];
+            for (const line of lines) {
+                const match = line.match(/^(.{3,120}?)\s*(?:\.{2,}|…+)?\s+(\d{1,4}|[ivxlcdm]{1,8})\s*$/i);
+                if (!match) continue;
+                const title = match[1].replace(/[.\s…]+$/, '').trim();
+                const normalizedTitle = normalizeHeading(title);
+                if (normalizedTitle.length > 2) pageCandidates.push({ title, normalizedTitle });
+            }
+            if (pageIndex !== contentsPageIndex && pageCandidates.length < 2) break;
+            if (pageCandidates.length) {
+                pageIndices.add(pageIndex);
+                lastContentsPage = pageIndex;
+                candidates.push(...pageCandidates);
+            }
+        }
+
+        const entries = [];
+        const seen = new Set();
+        for (const candidate of candidates) {
+            if (seen.has(candidate.normalizedTitle)) continue;
+            seen.add(candidate.normalizedTitle);
+            const page = findHeadingPage(candidate.title, lastContentsPage);
+            if (page) entries.push({ title: candidate.title, pageNumber: page.pageNumber, depth: 0 });
+        }
+        return { entries, pageIndices };
+    }
+
+    function findHeadingPage(title, afterPageIndex) {
+        const normalizedTitle = normalizeHeading(title);
+        return translationPages.slice(afterPageIndex + 1).find(page =>
+            page.lines.some(line => {
+                const normalizedLine = normalizeHeading(line);
+                return normalizedLine === normalizedTitle || normalizedLine.startsWith(normalizedTitle);
+            })
+        );
+    }
+
+    function correctOutlineDestinations(contentsPageIndices) {
+        const lastContentsPage = Math.max(-1, ...contentsPageIndices);
+        for (const entry of outlineEntries) {
+            if (contentsPageIndices.has(entry.pageNumber - 1)) {
+                const actualPage = findHeadingPage(entry.title, lastContentsPage);
+                if (actualPage) entry.pageNumber = actualPage.pageNumber;
+            }
+        }
+    }
+
+    function populateOutline(entries) {
+        outlineSelect.replaceChildren(new Option('目录 / 书签', ''));
+        for (const entry of entries) {
+            const indentation = '　'.repeat(Math.min(entry.depth, 5));
+            outlineSelect.add(new Option(
+                `${indentation}${entry.title}（第 ${entry.pageNumber} 页）`,
+                String(entry.pageNumber)
+            ));
+        }
+        outlineSelect.disabled = entries.length === 0;
+    }
+
+    function buildTextView() {
+        const fragment = document.createDocumentFragment();
+        translationPages.forEach(page => {
+            const section = document.createElement('section');
+            section.className = 'translation-page';
+            section.id = `text-page-${page.pageNumber}`;
+            section.dataset.pageNumber = String(page.pageNumber);
+            const heading = document.createElement('h2');
+            heading.textContent = `第 ${page.pageNumber} 页`;
+            section.appendChild(heading);
+            for (const line of page.lines) {
+                const paragraph = document.createElement('p');
+                paragraph.textContent = line;
+                section.appendChild(paragraph);
+            }
+            fragment.appendChild(section);
+        });
+        translationPagesContainer.replaceChildren(fragment);
+        if (textPageObserver) textPageObserver.disconnect();
+        textPageObserver = new IntersectionObserver(entries => {
+            const visiblePage = entries
+                .filter(entry => entry.isIntersecting)
+                .sort((a, b) => b.intersectionRatio - a.intersectionRatio)[0];
+            if (!visiblePage || reader.dataset.mode !== 'text') return;
+            currentTranslationPage = Number(visiblePage.target.dataset.pageNumber) - 1;
+            pageCounter.textContent = `${currentTranslationPage + 1} / ${totalPdfPages}`;
+            pageJumpInput.value = String(currentTranslationPage + 1);
+        }, { threshold: [0, 0.2, 0.5, 0.8], rootMargin: '-10% 0px -70% 0px' });
+        translationPagesContainer.querySelectorAll('.translation-page').forEach(section => {
+            textPageObserver.observe(section);
+        });
+    }
+
+    function jumpToPage(pageNumber) {
+        if (!Number.isInteger(pageNumber) || pageNumber < 1 || pageNumber > totalPdfPages) {
+            setStatus(`请输入 1 到 ${totalPdfPages} 之间的页码。`, true);
+            return;
+        }
+        const target = reader.dataset.mode === 'text'
+            ? document.getElementById(`text-page-${pageNumber}`)
+            : pagesContainer.querySelector(`[data-page-number="${pageNumber}"]`);
+        if (!target) {
+            setStatus(`无法定位到第 ${pageNumber} 页。`, true);
+            return;
+        }
+        currentTranslationPage = pageNumber - 1;
+        pageCounter.textContent = `${pageNumber} / ${totalPdfPages}`;
+        pageJumpInput.value = String(pageNumber);
+        const toolbarHeight = document.querySelector('.toolbar').getBoundingClientRect().height;
+        const targetTop = window.scrollY + target.getBoundingClientRect().top - toolbarHeight - 16;
+        window.scrollTo({ top: Math.max(0, targetTop), behavior: 'smooth' });
+        setStatus(`正在定位到第 ${pageNumber} 页。`, false);
     }
 
     function appendPage(pageNumber, page, textContent, currentLoadId) {
@@ -361,6 +542,7 @@
         const section = document.createElement('section');
         section.className = 'pdf-page';
         section.setAttribute('aria-label', `PDF 第 ${pageNumber} 页`);
+        section.dataset.pageNumber = String(pageNumber);
         section.style.aspectRatio = `${viewport.width} / ${viewport.height}`;
 
         const canvas = document.createElement('canvas');
@@ -441,10 +623,14 @@
         if (!file) return;
         const currentLoadId = ++loadId;
         currentTranslationPage = 0;
+        totalPdfPages = 0;
+        translationPages.length = 0;
+        outlineEntries.length = 0;
+        if (textPageObserver) textPageObserver.disconnect();
         reader.dataset.mode = 'pdf';
         translationPagesContainer.hidden = true;
-        translationNav.hidden = true;
-        translationToggle.hidden = true;
+        translationNav.dataset.disabled = 'true';
+        translationToggle.disabled = true;
         translationToggle.setAttribute('aria-pressed', 'false');
         translationToggle.textContent = '文本视图';
         if (pageObserver) pageObserver.disconnect();
@@ -455,7 +641,8 @@
         renderTasks.clear();
         pagesContainer.replaceChildren();
         translationPagesContainer.replaceChildren();
-        translationPages.length = 0;
+        outlineSelect.replaceChildren(new Option('目录 / 书签', ''));
+        outlineSelect.disabled = true;
         setStatus('正在读取 PDF…', false);
 
         if (file.type !== 'application/pdf' && !file.name.toLowerCase().endsWith('.pdf')) {
@@ -475,10 +662,12 @@
             pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
             const pdf = await pdfjsLib.getDocument({ data: await file.arrayBuffer() }).promise;
             if (currentLoadId !== loadId) return;
+            totalPdfPages = pdf.numPages;
 
             let textItems = 0;
             if ('IntersectionObserver' in window) {
                 pageObserver = new IntersectionObserver(entries => {
+                    const visiblePages = entries.filter(entry => entry.isIntersecting);
                     for (const entry of entries) {
                         const state = entry.target.pageState;
                         if (entry.isIntersecting) {
@@ -493,6 +682,17 @@
                             }
                         }
                     }
+                    if (reader.dataset.mode === 'pdf' && visiblePages.length) {
+                        const viewportCenter = window.innerHeight / 2;
+                        const currentPage = visiblePages.sort((a, b) => {
+                            const aCenter = (a.boundingClientRect.top + a.boundingClientRect.bottom) / 2;
+                            const bCenter = (b.boundingClientRect.top + b.boundingClientRect.bottom) / 2;
+                            return Math.abs(aCenter - viewportCenter) - Math.abs(bCenter - viewportCenter);
+                        })[0].target.dataset.pageNumber;
+                        currentTranslationPage = Number(currentPage) - 1;
+                        pageCounter.textContent = `${currentPage} / ${totalPdfPages}`;
+                        pageJumpInput.value = currentPage;
+                    }
                 }, { rootMargin: '1000px 0px' });
             }
 
@@ -506,11 +706,27 @@
                 setStatus(`正在准备页面… ${pageNumber}/${pdf.numPages} 页`, false);
             }
 
+            outlineEntries.push(...await getOutlineEntries(pdf));
+            const printedContents = findPrintedContentsInfo();
+            correctOutlineDestinations(printedContents.pageIndices);
+            const knownOutlineTitles = new Set(outlineEntries.map(entry => normalizeHeading(entry.title)));
+            outlineEntries.push(...printedContents.entries.filter(entry =>
+                !knownOutlineTitles.has(normalizeHeading(entry.title))
+            ));
+            populateOutline(outlineEntries);
+            buildTextView();
             placeholderText.hidden = true;
-            translationToggle.hidden = !textItems;
+            translationToggle.disabled = !textItems;
+            translationNav.dataset.disabled = 'false';
+            outlineSelect.disabled = outlineEntries.length === 0;
+            pageJumpInput.disabled = false;
+            pageJumpButton.disabled = false;
+            pageJumpInput.max = String(pdf.numPages);
+            pageJumpInput.value = '1';
+            pageCounter.textContent = `1 / ${pdf.numPages}`;
             setStatus(
                 textItems
-                    ? `已载入 ${pdf.numPages} 页。PDF 视图保留原排版；如需文本，请切换到“文本视图”。`
+                    ? `已载入 ${pdf.numPages} 页。文本视图支持连续滚动${outlineEntries.length ? '，并可通过目录/书签定位' : '，可输入页码定位'}。`
                     : `已载入 ${pdf.numPages} 页，但未提取到文字；该 PDF 可能是扫描图片，需先进行 OCR。`,
                 !textItems
             );
@@ -519,9 +735,13 @@
             pagesContainer.replaceChildren();
             translationPagesContainer.replaceChildren();
             translationPages.length = 0;
+            outlineEntries.length = 0;
             placeholderText.hidden = false;
-            translationNav.hidden = true;
-            translationToggle.hidden = true;
+            translationNav.dataset.disabled = 'true';
+            translationToggle.disabled = true;
+            outlineSelect.disabled = true;
+            pageJumpInput.disabled = true;
+            pageJumpButton.disabled = true;
             setStatus(`无法读取该 PDF：${error.message || '文件可能已损坏或受密码保护。'}`, true);
         } finally {
             if (currentLoadId === loadId) fileSelector.value = '';
@@ -529,29 +749,32 @@
     });
 
     translationToggle.addEventListener('click', () => {
-        const showTranslation = reader.dataset.mode !== 'translation';
-        reader.dataset.mode = showTranslation ? 'translation' : 'pdf';
+        const showTranslation = reader.dataset.mode !== 'text';
+        reader.dataset.mode = showTranslation ? 'text' : 'pdf';
         translationPagesContainer.hidden = !showTranslation;
-        translationNav.hidden = !showTranslation;
         translationToggle.setAttribute('aria-pressed', String(showTranslation));
         translationToggle.textContent = showTranslation ? '返回 PDF 原版布局' : '文本视图';
-        if (showTranslation) renderTranslationPage(findTextPage(0, 1));
+        if (translationPages[currentTranslationPage]) {
+            jumpToPage(translationPages[currentTranslationPage].pageNumber);
+        }
         setStatus(
             showTranslation
-                ? '当前仅显示一页普通网页文字；若插件无反应，请允许它访问 file:// 页面。'
-                : '已返回 PDF 原版布局。可切换到文本视图。',
+                ? '文本视图已开启，可连续滚动阅读，并可用目录或页码定位。'
+                : '已返回 PDF 原版布局；可继续用目录或页码定位。',
             false
         );
     });
 
-    previousPageButton.addEventListener('click', () => {
-        const previousPage = findTextPage(currentTranslationPage - 1, -1);
-        if (previousPage !== -1) renderTranslationPage(previousPage);
+    pageJumpButton.addEventListener('click', () => {
+        jumpToPage(Number(pageJumpInput.value));
     });
 
-    nextPageButton.addEventListener('click', () => {
-        const nextPage = findTextPage(currentTranslationPage + 1, 1);
-        if (nextPage !== -1) renderTranslationPage(nextPage);
+    pageJumpInput.addEventListener('keydown', event => {
+        if (event.key === 'Enter') jumpToPage(Number(pageJumpInput.value));
+    });
+
+    outlineSelect.addEventListener('change', () => {
+        if (outlineSelect.value) jumpToPage(Number(outlineSelect.value));
     });
 </script>
 
