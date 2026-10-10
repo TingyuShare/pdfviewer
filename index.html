@@ -32,9 +32,7 @@
             display: grid;
             grid-template-columns: auto minmax(0, 1fr);
             grid-template-areas:
-                "title actions"
-                "navigation navigation"
-                "status status";
+                "title actions";
             align-items: center;
             box-shadow: 0 2px 5px rgba(0,0,0,0.3);
             z-index: 10;
@@ -86,16 +84,24 @@
             grid-area: actions;
             display: flex;
             align-items: center;
-            justify-content: flex-end;
-            gap: 8px;
+            justify-content: space-between;
+            gap: 16px;
             min-width: 0;
         }
-        .translation-nav {
-            grid-area: navigation;
+        .toolbar-file-actions {
             display: flex;
             align-items: center;
             gap: 8px;
+            flex: 0 0 auto;
+        }
+        .translation-nav {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
             flex-wrap: wrap;
+            flex: 1 1 auto;
+            min-width: 0;
             min-height: 40px;
         }
         .translation-nav[data-disabled="true"] {
@@ -124,15 +130,17 @@
             width: 76px;
         }
         .status {
-            grid-area: status;
-            min-height: 2.6em;
+            flex: 0 1 260px;
+            width: 260px;
+            min-height: 33px;
             line-height: 1.3;
             color: #d5d8da;
             font-size: 13px;
             overflow: hidden;
-            display: -webkit-box;
-            -webkit-box-orient: vertical;
-            -webkit-line-clamp: 2;
+            display: flex;
+            align-items: center;
+            white-space: nowrap;
+            text-overflow: ellipsis;
         }
         .status[data-error="true"] {
             color: #ffb4ab;
@@ -220,29 +228,58 @@
         [hidden] {
             display: none !important;
         }
+        @media (max-width: 1000px) {
+            .toolbar {
+                grid-template-columns: minmax(0, 1fr);
+                grid-template-areas:
+                    "title"
+                    "actions";
+            }
+            .toolbar-actions {
+                flex-wrap: wrap;
+            }
+            .translation-nav {
+                flex: 1 0 100%;
+                order: 1;
+            }
+            .toolbar-file-actions {
+                margin-left: auto;
+                order: 2;
+            }
+        }
         @media (max-width: 600px) {
             .toolbar {
                 padding: 10px 12px;
                 grid-template-columns: minmax(0, 1fr);
                 grid-template-areas:
                     "title"
-                    "actions"
-                    "navigation"
-                    "status";
+                    "actions";
             }
             .toolbar h1 {
                 font-size: 14px;
             }
             .status {
                 width: 100%;
-                text-align: left;
+                flex: 1 0 100%;
+                min-height: 2.6em;
+                white-space: normal;
             }
             .toolbar-actions {
                 flex-wrap: wrap;
                 justify-content: flex-start;
             }
             .translation-nav {
+                flex: 1 0 100%;
+                justify-content: flex-start;
+                order: 1;
+            }
+            .toolbar-file-actions {
                 flex-wrap: wrap;
+                order: 2;
+            }
+            .status {
+                flex: 1 0 100%;
+                width: 100%;
             }
             .reader {
                 margin: 12px auto;
@@ -260,21 +297,23 @@
     <div class="toolbar">
         <h1>PDF 文本阅读器</h1>
         <div class="toolbar-actions">
-            <div class="file-input-wrapper">
-                <button class="btn" type="button">选择 PDF 文件</button>
-                <input type="file" id="file-selector" accept="application/pdf,.pdf" aria-label="选择 PDF 文件">
-            </div>
-            <button class="btn" id="translation-toggle" type="button" aria-pressed="false" disabled>文本视图</button>
-        </div>
-        <div class="translation-nav" id="translation-nav" data-disabled="true">
+            <div class="translation-nav" id="translation-nav" data-disabled="true">
                 <select id="outline-select" aria-label="文档目录" disabled>
                     <option value="">目录 / 书签</option>
                 </select>
                 <input id="page-jump-input" type="number" min="1" value="1" aria-label="跳转到 PDF 页码" disabled>
                 <button class="btn" id="page-jump-button" type="button" disabled>跳转</button>
                 <span id="page-counter" aria-live="polite"></span>
+            </div>
+            <div class="toolbar-file-actions">
+                <div class="file-input-wrapper">
+                    <button class="btn" type="button">选择 PDF 文件</button>
+                    <input type="file" id="file-selector" accept="application/pdf,.pdf" aria-label="选择 PDF 文件">
+                </div>
+                <button class="btn" id="translation-toggle" type="button" aria-pressed="false" disabled>文本视图</button>
+                <div class="status" id="status" role="status" aria-live="polite">选择 PDF 后将提取文本。</div>
+            </div>
         </div>
-        <div class="status" id="status" role="status" aria-live="polite">选择 PDF 后将提取文本。</div>
     </div>
     
     <main class="reader" id="reader" data-mode="pdf">
@@ -726,7 +765,7 @@
             pageCounter.textContent = `1 / ${pdf.numPages}`;
             setStatus(
                 textItems
-                    ? `已载入 ${pdf.numPages} 页。文本视图支持连续滚动${outlineEntries.length ? '，并可通过目录/书签定位' : '，可输入页码定位'}。`
+                    ? `已载入 ${pdf.numPages} 页。`
                     : `已载入 ${pdf.numPages} 页，但未提取到文字；该 PDF 可能是扫描图片，需先进行 OCR。`,
                 !textItems
             );
